@@ -3,7 +3,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from youtube_semantic_chunker import YoutubeSemanticChunker
 from langchain_community.embeddings import FastEmbedEmbeddings
 
-from extractor import fetch_transcript
+from transcript_extractor import fetch_transcript
 
 
 # preoprocessing the transcript
@@ -30,8 +30,6 @@ def chuck_transcript(transcript):
     return chunks
 
 
-
-url = "https://www.youtube.com/watch?v=ut-ZwrpPb0U"
 # transcript = fetch_transcript(url)
 # chunks = chuck_transcript(transcript)
 #
@@ -94,6 +92,28 @@ def get_final_chunks(transcript):
     )
 
     return sections
+
+def pick_frame_timestamp(diagrams):
+
+    for diagram in diagrams :
+        start = diagram['start']
+        end = diagram['end']
+
+        if end-start>2:
+            diagram['start'] = end-2
+
+
+    return diagrams
+
+
+
+
+
+
+
+
+
+
 
 
 # transcript = fetch_transcript(url)

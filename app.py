@@ -1,8 +1,17 @@
+import os
+
 import streamlit as st
 
-from extractor import fetch_transcript
-from preprocess import preprocess_transcript
-from llm import correct_transcript, generate_notes
+from transcript_extractor import (
+    fetch_transcript,
+    extract_youtube_id
+)
+
+from llm import (
+    generate_notes_with_diagrams,
+    generate_topic
+)
+
 from database import (
     initialize_database,
     save_notes,
@@ -35,7 +44,9 @@ st.set_page_config(
 # HEADER
 # --------------------------------------------------
 
-st.title("📚 YouTube Notes Generator")
+st.title(
+    "📚 YouTube Notes Generator"
+)
 
 st.write(
     "Generate detailed, structured notes from any YouTube video."
@@ -43,16 +54,122 @@ st.write(
 
 
 # --------------------------------------------------
-# SIDEBAR - SAVED NOTES
+# DISPLAY NOTES + VISUALS
 # --------------------------------------------------
 
-st.sidebar.title("📚 Saved Notes")
+def display_notes_with_visuals(
+        notes,
+        diagrams
+):
+
+    for line in notes.splitlines():
+
+        # ------------------------------------------
+        # VISUAL MARKER
+        # ------------------------------------------
+
+        if "[VISUAL:" in line:
+
+            try:
+
+                start = (
+                        line.index("[VISUAL:")
+                        + len("[VISUAL:")
+                )
+
+                end = line.index(
+                    "]",
+                    start
+                )
+
+                visual_id = int(
+                    line[start:end]
+                )
+
+                # ----------------------------------
+                # VALID VISUAL ID
+                # ----------------------------------
+
+                if (
+                        1 <= visual_id
+                        <= len(diagrams)
+                ):
+
+                    diagram = diagrams[
+                        visual_id - 1
+                        ]
+
+                    image_path = diagram[
+                        "path"
+                    ]
+
+                    # ----------------------------------
+                    # MAKE ABSOLUTE PATH
+                    # ----------------------------------
+
+                    image_path = os.path.abspath(
+                        image_path
+                    )
+
+                    # ----------------------------------
+                    # CHECK FILE
+                    # ----------------------------------
+
+                    if os.path.exists(
+                            image_path
+                    ):
+
+                        st.image(
+                            image_path,
+                            caption=diagram.get(
+                                "reason",
+                                ""
+                            ),
+                            use_container_width=True
+                        )
+
+                    else:
+
+                        st.warning(
+                            "Visual file not found:\n"
+                            f"{image_path}"
+                        )
+
+            except (
+                    ValueError,
+                    KeyError,
+                    IndexError
+            ):
+
+                pass
+
+        else:
+
+            # --------------------------------------
+            # NORMAL MARKDOWN
+            # --------------------------------------
+
+            st.markdown(
+                line
+            )
+
+
+# --------------------------------------------------
+# SIDEBAR
+# --------------------------------------------------
+
+st.sidebar.title(
+    "📚 Saved Notes"
+)
 
 saved_notes = get_all_notes()
 
+
 if not saved_notes:
 
-    st.sidebar.info("No saved notes yet.")
+    st.sidebar.info(
+        "No saved notes yet."
+    )
 
 else:
 
@@ -63,7 +180,13 @@ else:
                 key=f"video_{video['video_id']}"
         ):
 
-            st.session_state["selected_video"] = video["video_id"]
+            st.session_state[
+                "selected_video"
+            ] = video["video_id"]
+
+            st.session_state[
+                "just_generated"
+            ] = False
 
 
 # --------------------------------------------------
@@ -72,7 +195,9 @@ else:
 
 url = st.text_input(
     "YouTube URL",
-    placeholder="Paste a YouTube video URL here..."
+    placeholder=(
+        "Paste a YouTube video URL here..."
+    )
 )
 
 
@@ -80,55 +205,68 @@ url = st.text_input(
 # GENERATE NOTES
 # --------------------------------------------------
 
-if st.button("Generate Notes", type="primary"):
+if st.button(
+        "Generate Notes",
+        type="primary"
+):
 
     if not url:
 
-        st.warning("Please enter a YouTube URL.")
+        st.warning(
+            "Please enter a YouTube URL."
+        )
 
     else:
 
         try:
 
-            with st.spinner("Extracting transcript..."):
+            with st.spinner(
+                    "Generating notes (this can take a minute)..."
+            ):
 
-                transcript = fetch_transcript(url)
+                # ----------------------------------
+                # GENERATE NOTES + DIAGRAMS
+                # ----------------------------------
 
-            with st.spinner("Cleaning transcript..."):
-
-                clean_transcript = preprocess_transcript(
-                    transcript
+                notes, diagrams = (
+                    generate_notes_with_diagrams(
+                        url
+                    )
                 )
 
-            with st.spinner("Correcting transcript..."):
+            # ----------------------------------
+            # STORE DIAGRAMS
+            # ----------------------------------
 
-                corrected_transcript = correct_transcript(
-                    clean_transcript
-                )
+            st.session_state[
+                "diagrams"
+            ] = diagrams
 
-            with st.spinner("Generating notes..."):
+            # ----------------------------------
+            # GET TOPIC
+            # ----------------------------------
 
-                notes = generate_notes(
-                    corrected_transcript
-                )
+            transcript = fetch_transcript(
+                url
+            )
 
-            # ------------------------------------------
-            # GET VIDEO ID
-            # ------------------------------------------
+            topic = generate_topic(
+                transcript
+            )
 
-            from extractor import extract_youtube_id
+            title = topic
 
-            video_id = extract_youtube_id(url)
+            # ----------------------------------
+            # VIDEO ID
+            # ----------------------------------
 
-            # ------------------------------------------
-            # TITLE
-            # ------------------------------------------
+            video_id = extract_youtube_id(
+                url
+            )
 
-            title = f"YouTube Video - {video_id}"
-
-            # ------------------------------------------
-            # SAVE
-            # ------------------------------------------
+            # ----------------------------------
+            # SAVE NOTES
+            # ----------------------------------
 
             version = save_notes(
                 video_id,
@@ -137,10 +275,36 @@ if st.button("Generate Notes", type="primary"):
                 notes
             )
 
-            st.session_state["selected_video"] = video_id
+            # ----------------------------------
+            # SESSION STATE
+            # ----------------------------------
+
+            st.session_state[
+                "selected_video"
+            ] = video_id
+
+            st.session_state[
+                "just_generated"
+            ] = True
+
+            # ----------------------------------
+            # SUCCESS
+            # ----------------------------------
 
             st.success(
-                f"Notes generated successfully! Version {version}"
+                f"Notes generated successfully! "
+                f"Version {version}"
+            )
+
+            # ----------------------------------
+            # DISPLAY IMMEDIATELY
+            # ----------------------------------
+
+            st.divider()
+
+            display_notes_with_visuals(
+                notes,
+                diagrams
             )
 
         except Exception as e:
@@ -167,11 +331,35 @@ if selected_video:
 
     if current_notes:
 
-        st.divider()
+        # ------------------------------------------
+        # ONLY DISPLAY HERE IF NOT JUST GENERATED
+        # ------------------------------------------
 
-        st.markdown(
-            current_notes
-        )
+        if not st.session_state.get(
+                "just_generated",
+                False
+        ):
+
+            st.divider()
+
+            diagrams = st.session_state.get(
+                "diagrams",
+                []
+            )
+
+            display_notes_with_visuals(
+                current_notes,
+                diagrams
+            )
+
+
+        # ------------------------------------------
+        # RESET FLAG
+        # ------------------------------------------
+
+        st.session_state[
+            "just_generated"
+        ] = False
 
 
         # ------------------------------------------
@@ -180,11 +368,14 @@ if selected_video:
 
         st.divider()
 
-        st.subheader("Version History")
+        st.subheader(
+            "Version History"
+        )
 
         versions = get_versions(
             selected_video
         )
+
 
         for version in versions:
 
@@ -192,11 +383,13 @@ if selected_video:
                 [2, 2, 1]
             )
 
+
             with col1:
 
                 st.write(
                     f"Version {version['version']}"
                 )
+
 
             with col2:
 
@@ -204,11 +397,14 @@ if selected_video:
                     version["created_at"]
                 )
 
+
             with col3:
 
                 if version["is_current"]:
 
-                    st.write("Current")
+                    st.write(
+                        "Current"
+                    )
 
                 else:
 

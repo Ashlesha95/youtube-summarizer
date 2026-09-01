@@ -2,10 +2,8 @@ from urllib.parse import urlparse
 from urllib.parse import parse_qs
 from youtube_transcript_api import YouTubeTranscriptApi
 
-
 import re
 # example url -
-url = "https://www.youtube.com/watch?v=ut-ZwrpPb0U"
 
 def extract_youtube_id(url):
     if urlparse(url).netloc == "www.youtube.com":
@@ -24,6 +22,28 @@ def fetch_transcript(url):
 
     transcript = " ".join(text)
     return transcript
+
+def fetch_timestamped_transcript(url):
+    video_id = extract_youtube_id(url)
+
+    ytt_api = YouTubeTranscriptApi()
+    fetched_transcript = ytt_api.fetch(video_id)
+
+    transcript = []
+
+    for snippet in fetched_transcript:
+        transcript.append({
+            "text": snippet.text,
+            "start": snippet.start,
+            "duration": snippet.duration,
+            "end": snippet.start + snippet.duration
+        })
+
+    return transcript
+
+
+
+
 
 
 
