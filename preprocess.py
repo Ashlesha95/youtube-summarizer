@@ -1,4 +1,5 @@
 import re
+
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from youtube_semantic_chunker import YoutubeSemanticChunker
 from langchain_community.embeddings import FastEmbedEmbeddings
@@ -6,7 +7,7 @@ from langchain_community.embeddings import FastEmbedEmbeddings
 from transcript_extractor import fetch_transcript
 
 
-# preoprocessing the transcript
+# preprocessing the transcript
 def preprocess_transcript(transcript1):
     transcript1 = transcript1.replace("\n", " ")
     transcript1 = transcript1.replace("\r", " ")
@@ -16,10 +17,10 @@ def preprocess_transcript(transcript1):
     return transcript1
 
 
-
 def chuck_transcript(transcript):
 
-    preprocessed_transcript  = preprocess_transcript(transcript)
+    preprocessed_transcript = preprocess_transcript(transcript)
+
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=300,
         chunk_overlap=20
@@ -39,20 +40,27 @@ def chuck_transcript(transcript):
 #     print(f"\n--- Chunk {i + 1} ---")
 #     print(chunk)
 
+
 def semantic_chunking(transcript1):
+
     preprocessed_transcript = preprocess_transcript(transcript1)
+
     embeddings = FastEmbedEmbeddings(
         model_name="BAAI/bge-small-en-v1.5"
     )
 
-    text_splitter = YoutubeSemanticChunker(embeddings,
-                                           method="gradient")
+    text_splitter = YoutubeSemanticChunker(
+        embeddings,
+        method="gradient"
+    )
 
     chunks_semantic = text_splitter.split_text(preprocessed_transcript)
 
     return chunks_semantic
 
+
 def create_child_chunks(semantic_chunk, max_size=2000):
+
     sentences = re.split(r'(?<=[.!?])\s+', semantic_chunk)
 
     child_chunks = []
@@ -60,6 +68,7 @@ def create_child_chunks(semantic_chunk, max_size=2000):
     current_size = 0
 
     for sentence in sentences:
+
         sentence_size = len(sentence)
 
         if current_size + sentence_size <= max_size:
@@ -79,7 +88,9 @@ def create_child_chunks(semantic_chunk, max_size=2000):
 
 
 def get_final_chunks(transcript):
+
     preprocessed_transcript = preprocess_transcript(transcript)
+
     embeddings = FastEmbedEmbeddings(model_name="BAAI/bge-small-en-v1.5")
 
     chunker = YoutubeSemanticChunker(embeddings, min_chunk_size=50)
@@ -93,27 +104,18 @@ def get_final_chunks(transcript):
 
     return sections
 
+
 def pick_frame_timestamp(diagrams):
 
-    for diagram in diagrams :
+    for diagram in diagrams:
+
         start = diagram['start']
         end = diagram['end']
 
-        if end-start>2:
-            diagram['start'] = end-2
-
+        if end - start > 1:
+            diagram['start'] = end - 1
 
     return diagrams
-
-
-
-
-
-
-
-
-
-
 
 
 # transcript = fetch_transcript(url)
@@ -126,20 +128,3 @@ def pick_frame_timestamp(diagrams):
 #     for i, chunk in enumerate(section["chunks"]):
 #         print(f"\n--- Chunk {i+1} ---")
 #         print(chunk)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
