@@ -1,4 +1,5 @@
 import sqlite3
+import json
 from datetime import datetime
 
 
@@ -30,6 +31,7 @@ def initialize_database():
                                                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                                                         video_id TEXT NOT NULL,
                                                         content TEXT NOT NULL,
+                                                        diagrams TEXT,
                                                         version INTEGER NOT NULL,
                                                         created_at TEXT NOT NULL,
                                                         is_current INTEGER NOT NULL DEFAULT 1,
@@ -39,15 +41,29 @@ def initialize_database():
                        )
                    """)
 
+    # Backward-compat: if the table already existed from before the
+    # diagrams column was added, patch it in without touching existing rows.
+    cursor.execute("PRAGMA table_info(notes)")
+    existing_columns = {row[1] for row in cursor.fetchall()}
+
+    if "diagrams" not in existing_columns:
+        cursor.execute("ALTER TABLE notes ADD COLUMN diagrams TEXT")
+
     connection.commit()
     connection.close()
 
 
-def save_notes(video_id, title, url, content):
+def save_notes(video_id, title, url, content, diagrams=None):
+    """
+    diagrams: list of dicts like [{"path": ..., "reason": ...}, ...],
+    matching the [VISUAL:N] markers used in `content`. Stored as JSON
+    per version, same lifecycle as the notes content itself.
+    """
     connection = get_connection()
     cursor = connection.cursor()
 
     now = datetime.now().isoformat(timespec="seconds")
+    diagrams_json = json.dumps(diagrams or [])
 
     # Check if this YouTube video already exists
     cursor.execute(
@@ -129,12 +145,13 @@ def save_notes(video_id, title, url, content):
     cursor.execute(
         """
         INSERT INTO notes
-            (video_id, content, version, created_at, is_current)
-        VALUES (?, ?, ?, ?, 1)
+            (video_id, content, diagrams, version, created_at, is_current)
+        VALUES (?, ?, ?, ?, ?, 1)
         """,
         (
             video_id,
             content,
+            diagrams_json,
             version,
             now
         )
@@ -168,6 +185,38 @@ def load_notes(video_id):
         return None
 
     return result[0]
+
+
+def load_diagrams(video_id):
+    """
+    Returns the diagrams list for the *current* version of a video's notes,
+    matching what load_notes() returns. Empty list if none were saved
+    (e.g. notes saved before this feature existed, or a video with no visuals).
+    """
+    connection = get_connection()
+    cursor = connection.cursor()
+
+    cursor.execute(
+        """
+        SELECT diagrams
+        FROM notes
+        WHERE video_id = ?
+          AND is_current = 1
+        """,
+        (video_id,)
+    )
+
+    result = cursor.fetchone()
+
+    connection.close()
+
+    if result is None or result[0] is None:
+        return []
+
+    try:
+        return json.loads(result[0])
+    except (json.JSONDecodeError, TypeError):
+        return []
 
 
 def load_metadata(video_id):
@@ -243,6 +292,7 @@ def get_versions(video_id):
         SELECT
             id,
             content,
+            diagrams,
             version,
             created_at,
             is_current
@@ -260,15 +310,67 @@ def get_versions(video_id):
     versions = []
 
     for row in rows:
+        try:
+            diagrams = json.loads(row[2]) if row[2] else []
+        except (json.JSONDecodeError, TypeError):
+            diagrams = []
+
         versions.append({
             "id": row[0],
             "content": row[1],
-            "version": row[2],
-            "created_at": row[3],
-            "is_current": bool(row[4])
+            "diagrams": diagrams,
+            "version": row[3],
+            "created_at": row[4],
+            "is_current": bool(row[5])
         })
 
     return versions
+
+
+def delete_video(video_id):
+    """
+    Deletes a video and every note version tied to it (all history,
+    not just the current version). Returns True if a video was deleted,
+    False if no such video_id existed.
+    """
+    connection = get_connection()
+    cursor = connection.cursor()
+
+    cursor.execute(
+        """
+        SELECT video_id
+        FROM videos
+        WHERE video_id = ?
+        """,
+        (video_id,)
+    )
+
+    exists = cursor.fetchone()
+
+    if exists is None:
+        connection.close()
+        return False
+
+    cursor.execute(
+        """
+        DELETE FROM notes
+        WHERE video_id = ?
+        """,
+        (video_id,)
+    )
+
+    cursor.execute(
+        """
+        DELETE FROM videos
+        WHERE video_id = ?
+        """,
+        (video_id,)
+    )
+
+    connection.commit()
+    connection.close()
+
+    return True
 
 
 def revert_notes(video_id, version):
@@ -346,7 +448,7 @@ if __name__ == "__main__":
 
     print("Database initialized.")
 
-    # Test saving notes
+    # Test saving notes with diagrams
     version = save_notes(
         "ut-ZwrpPb0U",
         "ADLC and Harness Engineering",
@@ -355,7 +457,11 @@ if __name__ == "__main__":
 
 - ADLC represents the Agentic Development Life Cycle.
 - The three Hs are Harness, Handoffs, and Humans.
-"""
+[VISUAL:1]
+""",
+        diagrams=[
+            {"path": "frames/frame_001.png", "reason": "Diagram of the ADLC loop"}
+        ]
     )
 
     print("Saved version:", version)
@@ -363,6 +469,9 @@ if __name__ == "__main__":
     # Test current notes
     print("\nCurrent notes:")
     print(load_notes("ut-ZwrpPb0U"))
+
+    print("\nCurrent diagrams:")
+    print(load_diagrams("ut-ZwrpPb0U"))
 
     # Test metadata
     print("\nMetadata:")

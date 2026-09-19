@@ -149,8 +149,10 @@ IMPORTANT:
   visual concept in the transcript.
 - Do not select introductions, greetings, or irrelevant content.
 - Avoid repeated visuals where possible.
-
+- if the whole screen have a person only then ignore it
+- display diagrams, table like data which can be used to understand the notes.
 For every candidate return:
+- IMPORTANT - DO NOT SHOW ANYBODY LIKE IF ON THE WHOLE SCREEN ONLY SPEAKER IS PRESENT THOSE VISUALS SHOULD NOT BE CHOSEN
 
 - start: start time in seconds
 - end: end time in seconds
@@ -288,51 +290,9 @@ Rules:
 
 VISUAL RULES:
 
-15. The provided visuals are candidate diagrams, graphs,
-    tables, slides, or other educational visuals.
+Here think of yourself as a student or teacher, which visuals would you like to have in notes. select 
+only those visuals.
 
-16. Place a visual ONLY where it genuinely helps explain
-    the surrounding concept.
-
-17. Do NOT place a visual merely because it is available.
-
-18. Do NOT repeat the same visual.
-
-19. Use a visual when it adds meaningful understanding to
-    the notes.
-
-20. When you decide to use a visual, insert ONLY its marker.
-
-    Example:
-
-    [VISUAL:1]
-
-21. The number must correspond to the VISUAL_ID provided below.
-
-22. NEVER create Markdown links for visuals.
-
-23. NEVER create HTML image tags.
-
-24. NEVER include image file paths.
-
-25. NEVER create URLs for visuals.
-
-26. Do not mention unused visuals.
-
-27. Keep the visual marker close to the explanation
-    that it supports.
-
-28. Do not put a visual at the beginning of the notes unless
-    it genuinely belongs there.
-
-29. Prefer visuals that explain:
-    - architecture
-    - relationships
-    - processes
-    - comparisons
-    - graphs
-    - tables
-    - technical concepts
 
 
 CAPTIONS:
@@ -390,3 +350,245 @@ def generate_notes_with_diagrams(url):
         diagrams
     )
     return notes, diagrams
+
+def answer_from_video(
+        question,
+        retrieved_chunks
+):
+
+    context_parts = []
+
+    for chunk in retrieved_chunks:
+
+        context_parts.append(
+            f"""
+Section {chunk['section_id']}
+Chunk {chunk['chunk_id']}
+
+{chunk['text']}
+"""
+        )
+
+    context = "\n\n".join(
+        context_parts
+    )
+
+    prompt = f"""
+You are a question-answering assistant
+for a YouTube video.
+
+Answer the user's question ONLY using
+the provided transcript context.
+
+If the context does not contain enough
+information to answer the question,
+say:
+
+"I don't have enough information in the
+video to answer this question."
+
+Do NOT use your own general knowledge.
+
+Do NOT invent facts.
+
+Question:
+{question}
+
+Transcript context:
+{context}
+
+Answer:
+"""
+
+    response = client.models.generate_content(
+        model="gemini-3.5-flash-lite",
+        contents=prompt
+    )
+
+    return response.text
+
+def answer_generally(question):
+    """
+    Fallback used when retrieval couldn't find enough relevant
+    transcript context. This must NOT reference "the video",
+    "the transcript", or any retrieval/internal-system language in
+    its own reasoning — the previous version primed the model with
+    that framing in the prompt itself, then separately told it not
+    to mention it, which is a contradiction the model resolved by
+    following the framing (hence answers like "the video transcript
+    did not contain enough information").
+
+    Note: a question like "what is this video about" is inherently
+    unanswerable here even with a clean prompt, since general
+    knowledge has no way to know which video you mean. That class of
+    question needs to be answered from retrieval (i.e. actual video
+    content), not this fallback — see the note in rag.py/app.py about
+    indexing the generated notes/summary so retrieval can serve it.
+    """
+
+    prompt = f"""
+You are a helpful, knowledgeable assistant.
+Answer the following question directly, using your own general
+knowledge.
+
+IMPORTANT:
+- Do not reference a transcript, a video's content, retrieval, or
+  any internal system — just answer the question itself.
+- Start your answer by briefly noting that this comes from general
+  knowledge, not the video's own content.
+- If the question cannot be meaningfully answered without knowing
+  which specific video is being discussed (for example, a vague
+  question like "what is this about" with no topic given), say so
+  plainly in one sentence and ask the user to share the video's
+  title or subject — do not guess or ramble about YouTube videos
+  in general.
+- Otherwise, give a useful, concise answer to the actual question.
+
+Question:
+{question}
+
+Answer:
+"""
+
+    response = client.models.generate_content(
+        model="gemini-3.5-flash-lite",
+        contents=prompt
+    )
+
+    return response.text
+
+
+def classify_question_scope(question):
+    """
+    Routes a question before retrieval even happens.
+
+    "broad": needs the video's overall structure/content — a
+    summary, an overview, "what's this about", "what's in chapter/
+    section N", "what topics does this cover". No single transcript
+    chunk represents this; answer from the full notes instead
+    (see answer_from_notes below), never through chunk retrieval.
+
+    "specific": a narrow factual/detail question best answered from
+    one or two specific transcript passages — keep using the
+    existing retrieve() + has_sufficient_evidence() pipeline for
+    these, since that's genuinely the right tool for them.
+
+    Deliberately a separate, tiny classification call rather than a
+    keyword list — phrasing for "give me an overview" varies too
+    much ("what's this about", "summarize this", "what does this
+    cover", "tell me about chapter 2"...) for fixed keywords to
+    reliably catch, and this call is small/fast/cheap.
+    """
+
+    prompt = f"""
+Classify the following question about a video into exactly one of
+two categories: "broad" or "specific".
+
+"broad" means the question is asking about the video's overall
+content, summary, main topics, structure, or the contents of a
+named chapter/section (even if the phrasing is roundabout or
+casual). Examples: "what is this video about", "summarize this",
+"what does this cover", "what's in chapter 1", "give me the gist",
+"what are the main topics".
+
+"specific" means the question asks about one narrow fact, detail,
+example, or explanation that would appear in one specific part of
+the video, not the whole thing. Examples: "what does the speaker
+say about X", "what command did they run", "why did they choose Y
+over Z".
+
+Return ONLY the single word "broad" or "specific" — nothing else.
+
+Question:
+{question}
+"""
+
+    response = client.models.generate_content(
+        model="gemini-3.5-flash-lite",
+        contents=prompt
+    )
+
+    scope = response.text.strip().lower()
+
+    return "broad" if "broad" in scope else "specific"
+
+
+def answer_broad_question(question, notes, transcript):
+    """
+    Answers "broad" questions (see classify_question_scope) using
+    BOTH the notes and the full transcript — not the notes alone.
+
+    Notes are a deliberately trimmed, curated version of the video
+    (your own generate_notes prompt explicitly removes filler,
+    repetition, and reduces things to concise bullets) — anything
+    the notes-writer judged less essential simply isn't there. The
+    transcript is the actual complete source. Notes are still useful
+    here for their headings/structure (helpful for "what's in
+    chapter 1"-style questions), but the transcript is what makes
+    sure nothing the video actually said is unreachable in chat just
+    because it got trimmed out of the notes.
+
+    No chunk retrieval, no similarity threshold — this reads
+    everything at once, so it can't fail the way chunk-level
+    matching can for summary/overview-style questions.
+    """
+
+    # Strip [VISUAL:n] markers — layout instructions, not content.
+    cleaned_lines = [
+        line for line in notes.splitlines()
+        if "[VISUAL:" not in line
+    ]
+
+    cleaned_notes = "\n".join(cleaned_lines).strip()
+
+    prompt = f"""
+You are a teacher teaching the student with the examples which are easy to understand.
+
+
+1. NOTES — a curated, organized summary of the video, useful mainly
+   for understanding its structure (headings/sections/chapters).
+   The notes leave out some content for brevity, so do NOT treat
+   them as the complete picture.
+
+2. FULL TRANSCRIPT — the complete, unfiltered content of the video.
+   This is the authoritative source for anything the notes may have
+   trimmed out. Prefer the transcript whenever it has more detail
+   than the notes on the same point.
+
+3. Explain everything with proper examples as if you are teaching it. And if the user asks to understand again, walk them step by step.
+   JUST FOR EXAMPLES - YOU CAN USE RESOURCES FROM ANYWHERE BUT ANSWERS SHOULD BE GROUNDED TO NOTES AND TRANSCRIPT.
+   
+
+Answer the user's question using both sources together: use the
+notes to understand structure/organization (e.g. which part of the
+video a "chapter" or section refers to), and use the transcript to
+make sure your answer reflects everything the video actually covers
+on that topic, not just what made it into the notes.
+
+If neither source contains enough information to answer the
+question, say:
+
+"I don't have enough information in the video to answer this
+question."
+
+Do NOT use your own general knowledge to fill gaps.
+Do NOT invent facts, chapters, or sections that aren't in the video.
+
+Question: 
+{question}
+
+NOTES:
+{cleaned_notes}
+
+FULL TRANSCRIPT:
+{transcript}
+
+Answer:
+"""
+
+    response = client.models.generate_content(
+        model="gemini-3.5-flash-lite",
+        contents=prompt
+    )
+
+    return response.text
